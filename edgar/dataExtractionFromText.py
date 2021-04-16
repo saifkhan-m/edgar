@@ -4,6 +4,7 @@ import yfinance as yf
 import pandas as pd
 yf.pdr_override()
 import numpy as np
+import math
 
 itemtypes = {
     'Item1': 'Business',
@@ -44,17 +45,28 @@ def getInfofromfiles(fileslist, companyCIK,start = 2008, end=2020 ):
     retDF = retDF.rename(columns={'index': 'year'})
     return retDF.reset_index(level=0)
 
-def getLabelsfromStocks(stockInfo):
-    closingList = stockInfo['Close'].tolist()
-    reslist = [0]
-    for i in range(len(closingList)-1):
-        reslist.append(closingList[i+1]-closingList[i])
+def getLabelsfromStocks(stockInfo, stockInfoDJI):
+    parsedCompanydf = pd.merge(stockInfoDJI, stockInfo, how='outer', left_index=True, right_index=True)
+    info_dict = parsedCompanydf.set_index(parsedCompanydf.index).T.to_dict('list')
+    growthlist = [0]
+    for i in range(2008, 2020):
+        _, dji, _, stock = info_dict[i]
+        _, dji_n, _, stock_n = info_dict[i+1]
+        if  math.isnan(stock) or math.isnan(stock):
+            growthlist.append(math.nan)
+            continue
+        stock_annual_growth = (stock_n/stock)-1
+        dji_annual_growth = (dji_n/dji) - 1
+        growth = stock_annual_growth- dji_annual_growth
+        growthlist.append(round(growth,2))
 
-    stockInfo['label'] = np.array(reslist)
-    stockInfo['label'] = stockInfo["label"].apply(lambda x: 0 if x < 0 else (2 if x > 0 else 1))
-    stockInfo.reset_index(level=0, inplace=True)
-    stockInfo = stockInfo.rename(columns={'Date': 'year'})
-    return stockInfo
+    parsedCompanydf['label'] = np.array(growthlist)
+    parsedCompanydf.dropna(inplace=True)
+    parsedCompanydf['label'] = parsedCompanydf["label"].apply(lambda x: 0 if x < 0 else (2 if x > 0 else 1))
+    parsedCompanydf.reset_index(level=0, inplace=True)
+    parsedCompanydf = parsedCompanydf.rename(columns={'Date': 'year', 'Ticker_y':'Ticker', 'Close_y':'Close'})
+    parsedCompanydf = parsedCompanydf[['year','Ticker', 'Close','label']]
+    return parsedCompanydf
 
 
 def getcompleteDF(lst1):
@@ -63,7 +75,8 @@ def getcompleteDF(lst1):
     listofcompanyDF = []
     for index, row in companyInfoDF.iterrows():
         stockInfo = getStockInfo(row['Ticker'])
-        stockInfowithlabels = getLabelsfromStocks(stockInfo)
+        stockInfoDJI = getStockInfoDJI()
+        stockInfowithlabels = getLabelsfromStocks(stockInfo, stockInfoDJI)
         parsedCompanydf = getInfofromfiles(filelist, row['CIK'])
         parsedCompanydf = parsedCompanydf.drop('index', 1)
         parsedCompanydf = pd.merge(parsedCompanydf, stockInfowithlabels, on=['year'], how='inner')
@@ -81,22 +94,31 @@ def getCompanyInfo():
     dowDF = pd.read_csv("../SEC-EDGAR-text/companies_list.txt",sep=" ", names=["CIK", "Ticker"])
     return pd.merge(companyDF, dowDF, on=["CIK","Ticker"])[['Ticker', 'Name','CIK']]
 
-def getStockInfo(company,start="2008-01-01",end="2020-12-31"):
-    info = pdr.get_data_yahoo(company, start=start, end=end, interval="1mo")
-    crit2 = info.index.map(lambda x: x.month == 1)
+def getStockInfo(company,start="2008-02-01",end="2020-12-31"):
+    info = pdr.get_data_yahoo(company, start=start, end=end, interval="1d")
+    crit2 = info.index.map(lambda x : x.month == 12 and (x.day==31 or x.day==30 or x.day==29 ))
     info = info[crit2]
     info.index = pd.to_datetime(info.index, format='%Y-%m-%d').year
     info = info.dropna()
+    info.groupby(info.index).max()
     info['Ticker'] = company
     df = info[['Ticker','Close']]
+    df = df.groupby(df.index).max()
+    return df
+
+def getStockInfoDJI():
+    df = getStockInfo('DJI')
+    df.loc[2019] = ['DJI', 28538.4]
+    df = df.sort_index()
     return df
 
 filelist = getfilelist('../SEC-EDGAR-text/output_files_examples/batch_0004')
 #companyInfoDF = getCompanyInfo()
-#stockInfo = getStockInfo('DOW')
+#stockInfo = getStockInfo('AAPL')
+#stockInfoDJI = getStockInfoDJI()
 #compandf = getInfofromfiles(filelist, 29915)
-#labels = getLabelsfromStocks(stockInfo)
+#labels = getLabelsfromStocks(stockInfo, stockInfoDJI)
 completeDF  = getcompleteDF(filelist)
-completeDF.to_csv('DowJones_10K_012.csv')
+completeDF.to_csv('DowJones_10K_012_basemethod.csv')
 #print(completeDF)
 #print(stockInfo)
